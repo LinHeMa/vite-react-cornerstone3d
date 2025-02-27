@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react'
-import { cornerstoneStreamingDynamicImageVolumeLoader, cornerstoneStreamingImageVolumeLoader, init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader } from "@cornerstonejs/core"
+import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache } from "@cornerstonejs/core"
 import { init as csToolsInit } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { convertMultiframeImageIds, prefetchMetadataInformation } from '../../utils/prefetchMetadataInformation'
@@ -15,9 +15,9 @@ type FileDataRefType = {
     imageIdList: string[]
 }
 
-volumeLoader.registerUnknownVolumeLoader(
-    cornerstoneStreamingImageVolumeLoader
-)
+// volumeLoader.registerUnknownVolumeLoader(
+//     cornerstoneStreamingImageVolumeLoader
+// )
 
 const VolumeViewer = () => {
     const fileDataRef = useRef<FileDataRefType>({
@@ -35,6 +35,7 @@ const VolumeViewer = () => {
     const viewerRefCoronal = useRef<HTMLDivElement>(null);
     const viewerRefSagittal = useRef<HTMLDivElement>(null);
     const viewerRefVolume = useRef<HTMLDivElement>(null);
+
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const fileList = Array.from(event.target.files);
         if (fileList && fileDataRef) {
@@ -42,116 +43,145 @@ const VolumeViewer = () => {
         }
         console.log(fileDataRef.current.fileList)
     }
+    const restart = () => {
+        console.debug('Restarting some ui state about multiple file upload');
+        const { volumeId } = fileDataRef.current;
 
-    const loadUploadedFiles = async () => {
-        const imageIds: string[] = []
+        if (!volumeId) {
+            return;
+        }
 
-        for (const file of fileDataRef.current.fileList) {
+        cache.removeVolumeLoadObject(volumeId);
+    };
+
+    const readUploadedFiles = async (files: File[]) => {
+        for (const file of files) {
             // NOTE: 這個是新增的測試
             const imageId = await cornerstoneDICOMImageLoader.wadouri.fileManager.add(file)
-            imageIds.push(imageId)
+            await imageLoader.loadAndCacheImage(imageId);
+            fileDataRef.current.imageIdList.push(imageId)
         }
-        // NOTE: 這個是新增的測試
-        fileDataRef.current.imageIdList = imageIds;
-        console.log(fileDataRef.current.imageIdList)
-        await prefetchMetadataInformation(fileDataRef.current.imageIdList);
-        const stack = convertMultiframeImageIds(fileDataRef.current.imageIdList);
-        return stack;
+    }
+
+    const loadUploadedFiles = async () => {
+        restart()
+        const volumeLoaderScheme = 'cornerstoneStreamingImageVolume';
+        const {
+            volumeId,
+            toolGroup,
+            imageIdList,
+            viewportIds,
+            renderingEngineId,
+            renderingEngine,
+        } = fileDataRef.current;
+        fileDataRef.current.volumeId = volumeLoaderScheme + ':' + csUtilities.uuidv4();
+
+        const volume = await volumeLoader.createAndCacheVolume(fileDataRef.current.volumeId, {
+            imageIds: imageIdList,
+        });
+
+        await volume.load();
+
+        // viewportIds[3] 是 volume viewport
+        const viewport = renderingEngine.getViewport(viewportIds[3]);
+        await setVolumesForViewports(
+            renderingEngine,
+            [{ volumeId: fileDataRef.current.volumeId }],
+            viewportIds,
+        );
+
+        renderingEngine.render();
+        viewport.render();
+    }
+
+    const handleMultipleFileUpload = async (event: React.ChangeEvent<HTMLInputElement> | Event): Promise<void> => {
+        const files = Array.from((event.target as HTMLInputElement).files || []);
+        await readUploadedFiles(files);
+        await loadUploadedFiles();
     }
 
     useEffect(() => {
+        if (
+            !viewerRefAxial.current ||
+            !viewerRefCoronal.current ||
+            !viewerRefSagittal.current ||
+            !viewerRefVolume.current
+        ) {
+            console.log('Rendering engine not initializing');
+            return;
+        }
+
+        console.log('Rendering engine initializing');
+
+        const setupMultpleViewports = async () => {
+            console.log('setupMultpleViewports')
+            const renderingEngine = new RenderingEngine(fileDataRef.current.renderingEngineId);
+
+            const viewportInputArray = [
+                {
+                    viewportId: fileDataRef.current.viewportIds[0],
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    element: viewerRefAxial.current,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.AXIAL,
+                        background: [0.2, 0, 0.2] as Types.RGB,
+                    },
+                },
+                {
+                    viewportId: fileDataRef.current.viewportIds[1],
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    element: viewerRefCoronal.current,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.CORONAL,
+                        background: [0.2, 0, 0.2] as Types.RGB,
+                    },
+                },
+                {
+                    viewportId: fileDataRef.current.viewportIds[2],
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    element: viewerRefSagittal.current,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.SAGITTAL,
+                        background: [0.2, 0, 0.2] as Types.RGB,
+                    },
+                },
+                {
+                    viewportId: fileDataRef.current.viewportIds[3],
+                    type: Enums.ViewportType.VOLUME_3D,
+                    element: viewerRefVolume.current,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.AXIAL,
+                        background: [0.2, 0, 0.2] as Types.RGB,
+                    },
+                }
+            ]
+
+            renderingEngine.setViewports(viewportInputArray);
+            console.log('renderingEngine', renderingEngine)
+            fileDataRef.current.renderingEngine = renderingEngine;
+        }
         const setup = async () => {
-            if (running.current || fileDataRef.current.fileList.length === 0) {
+            if (running.current) {
                 console.log("Not running or no files uploaded")
                 return;
             }
-            if (!viewerRefAxial.current || !viewerRefCoronal.current || !viewerRefSagittal.current || !viewerRefVolume.current) {
-                console.log('Rendering engine not initializing');
-                return;
-            }
-            
-            console.log('Rendering engine initializing');
 
             running.current = true;
 
-            const setupMultpleViewports = async () => {
-
-            }
-
+            // cornerstoneDICOMImageLoader.init({ maxWebWorkers: 1 });
+            dicomImageLoaderInit({ maxWebWorkers: 1 });
             await csRenderInit();
             await csToolsInit();
-            dicomImageLoaderInit({ maxWebWorkers: 1 });
-
-            const stack = await loadUploadedFiles();
-
-            // Instantiate a rendering engine
-            const renderingEngineId = "volumeRenderingEngine"
-            const renderingEngine = new RenderingEngine(renderingEngineId)
-            // TODO: Make this dynamic
-            // TODO: find out what this means
-            const viewportIdAxial = "CT_AXIAL"
-            const viewportIdCoronal = "CT_CORONAL"
-            const viewportIdSagittal = "CT_SAGITTAL"
-
-            const viewportInput = [
-                {
-                    viewportId: viewportIdAxial,
-                    element: viewerRefAxial.current,
-                    type: Enums.ViewportType.ORTHOGRAPHIC,
-                    defaultOptions: {
-                        orientation: Enums.OrientationAxis.AXIAL,
-                    },
-                },
-                {
-                    viewportId: viewportIdCoronal,
-                    element: viewerRefCoronal.current,
-                    type: Enums.ViewportType.ORTHOGRAPHIC,
-                    defaultOptions: {
-                        orientation: Enums.OrientationAxis.CORONAL,
-                    },
-                },
-                {
-                    viewportId: viewportIdSagittal,
-                    element: viewerRefSagittal.current,
-                    type: Enums.ViewportType.ORTHOGRAPHIC,
-                    defaultOptions: {
-                        orientation: Enums.OrientationAxis.SAGITTAL,
-                    },
-                }]
-
-            renderingEngine.setViewports(viewportInput)
-
-            // Get the stack viewport that was created
-            // const viewport = renderingEngine.getViewports([viewportInput]) as Types.IVolumeViewport
-
-            // Define a volume in memory, is not equal to load the volume
-            // TODO: find out what this means
-            const volumeId = "streamingImageVolume"
-            console.log({ volumeId })
-            const volume = await volumeLoader.createAndCacheVolume(volumeId, {
-                imageIds: fileDataRef.current.imageIdList,
-            })
-            console.log(volume)
-
-            // Set the volume to  load
-            // @ts-ignore
-            volume.load()
-
-            // Set the volume on the viewport and it's default properties
-            // viewport.setVolumes([{ volumeId }]) 
-            setVolumesForViewports(
-                renderingEngine,
-                [{ volumeId }],
-                [viewportIdAxial, viewportIdCoronal, viewportIdSagittal]
-            )
-
-            // Render the image
-            // viewport.render()
-            renderingEngine.renderViewports([viewportIdAxial, viewportIdCoronal, viewportIdSagittal])
+            setupMultpleViewports();
+            console.debug('Rendering engine initialized');
         }
 
         setup()
-    }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, running])
+    }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, viewerRefVolume, running])
+
+    useEffect(() => {
+        console.log('fileDataRef.current', fileDataRef.current)
+    })
 
     return (
         <div>
@@ -159,7 +189,7 @@ const VolumeViewer = () => {
                 type="file"
                 multiple
                 accept=".dcm"
-                onChange={handleFileChange}
+                onChange={handleMultipleFileUpload}
             />
             <div
                 ref={viewerRefAxial}
@@ -179,6 +209,14 @@ const VolumeViewer = () => {
             />
             <div
                 ref={viewerRefSagittal}
+                style={{
+                    width: "512px",
+                    height: "512px",
+                    backgroundColor: "#000",
+                }}
+            />
+            <div
+                ref={viewerRefVolume}
                 style={{
                     width: "512px",
                     height: "512px",

@@ -4,7 +4,7 @@ import VolumeViewer from "./components/volume/VolumeViewer"
 function App() {
   return (
     <div>
-      <TutorialViewer />
+      {/* <TutorialViewer /> */}
       <VolumeViewer />
     </div>
   )
