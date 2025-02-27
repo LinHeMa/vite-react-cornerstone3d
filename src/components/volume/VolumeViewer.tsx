@@ -1,23 +1,19 @@
 import React, { useEffect, useRef } from 'react'
-import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache } from "@cornerstonejs/core"
-import { init as csToolsInit } from "@cornerstonejs/tools"
+import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core"
+import { init as csToolsInit, } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
-import { convertMultiframeImageIds, prefetchMetadataInformation } from '../../utils/prefetchMetadataInformation'
+import { type IToolGroup } from '@cornerstonejs/tools/types'
 
 type FileDataRefType = {
     renderingEngine: RenderingEngine | null;
     renderingEngineId: string;
-    toolGroup: null;
+    toolGroup: null | IToolGroup;
     toolGroupId: string;
     viewportIds: string[];
     volumeId: string;
     fileList: File[];
     imageIdList: string[]
 }
-
-// volumeLoader.registerUnknownVolumeLoader(
-//     cornerstoneStreamingImageVolumeLoader
-// )
 
 const VolumeViewer = () => {
     const fileDataRef = useRef<FileDataRefType>({
@@ -36,13 +32,6 @@ const VolumeViewer = () => {
     const viewerRefSagittal = useRef<HTMLDivElement>(null);
     const viewerRefVolume = useRef<HTMLDivElement>(null);
 
-    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const fileList = Array.from(event.target.files);
-        if (fileList && fileDataRef) {
-            fileDataRef.current.fileList = fileList;
-        }
-        console.log(fileDataRef.current.fileList)
-    }
     const restart = () => {
         console.debug('Restarting some ui state about multiple file upload');
         const { volumeId } = fileDataRef.current;
@@ -55,6 +44,7 @@ const VolumeViewer = () => {
     };
 
     const readUploadedFiles = async (files: File[]) => {
+        fileDataRef.current.imageIdList = [];
         for (const file of files) {
             // NOTE: 這個是新增的測試
             const imageId = await cornerstoneDICOMImageLoader.wadouri.fileManager.add(file)
@@ -67,35 +57,53 @@ const VolumeViewer = () => {
         restart()
         const volumeLoaderScheme = 'cornerstoneStreamingImageVolume';
         const {
-            volumeId,
-            toolGroup,
             imageIdList,
             viewportIds,
-            renderingEngineId,
             renderingEngine,
         } = fileDataRef.current;
+
+        if (!renderingEngine || imageIdList.length === 0) {
+            console.error('渲染引擎未初始化或沒有圖像');
+            return;
+        }
+
         fileDataRef.current.volumeId = volumeLoaderScheme + ':' + csUtilities.uuidv4();
 
-        const volume = await volumeLoader.createAndCacheVolume(fileDataRef.current.volumeId, {
-            imageIds: imageIdList,
-        });
+        try {
+            const volume = await volumeLoader.createAndCacheVolume(fileDataRef.current.volumeId, {
+                imageIds: imageIdList,
+            });
 
-        await volume.load();
+            await volume.load();
 
-        // viewportIds[3] 是 volume viewport
-        const viewport = renderingEngine.getViewport(viewportIds[3]);
-        await setVolumesForViewports(
-            renderingEngine,
-            [{ volumeId: fileDataRef.current.volumeId }],
-            viewportIds,
-        );
+            // viewportIds[3] 是 volume viewport
+            const viewport = renderingEngine.getViewport(viewportIds[3]);
+            await setVolumesForViewports(
+                renderingEngine,
+                [{ volumeId: fileDataRef.current.volumeId }],
+                viewportIds,
+            );
 
-        renderingEngine.render();
-        viewport.render();
+            renderingEngine.render();
+        } catch (error) {
+            console.error('加載volume時出錯:', error);
+        }
     }
 
     const handleMultipleFileUpload = async (event: React.ChangeEvent<HTMLInputElement> | Event): Promise<void> => {
         const files = Array.from((event.target as HTMLInputElement).files || []);
+
+        if (files.length === 0) {
+            console.warn('沒有選擇文件');
+            return;
+        }
+
+        // 確保渲染引擎已初始化
+        if (!fileDataRef.current.renderingEngine) {
+            console.error('渲染引擎尚未初始化');
+            return;
+        }
+
         await readUploadedFiles(files);
         await loadUploadedFiles();
     }
@@ -115,6 +123,7 @@ const VolumeViewer = () => {
 
         const setupMultpleViewports = async () => {
             console.log('setupMultpleViewports')
+
             const renderingEngine = new RenderingEngine(fileDataRef.current.renderingEngineId);
 
             const viewportInputArray = [
@@ -184,46 +193,33 @@ const VolumeViewer = () => {
     })
 
     return (
-        <div>
+        <>
             <input
+                className='cursor-pointer'
                 type="file"
                 multiple
                 accept=".dcm"
                 onChange={handleMultipleFileUpload}
             />
-            <div
-                ref={viewerRefAxial}
-                style={{
-                    width: "512px",
-                    height: "512px",
-                    backgroundColor: "#000",
-                }}
-            />
-            <div
-                ref={viewerRefCoronal}
-                style={{
-                    width: "512px",
-                    height: "512px",
-                    backgroundColor: "#000",
-                }}
-            />
-            <div
-                ref={viewerRefSagittal}
-                style={{
-                    width: "512px",
-                    height: "512px",
-                    backgroundColor: "#000",
-                }}
-            />
-            <div
-                ref={viewerRefVolume}
-                style={{
-                    width: "512px",
-                    height: "512px",
-                    backgroundColor: "#000",
-                }}
-            />
-        </div>
+            <div className="flex items-center justify-center">
+                <div
+                    className='w-[512px] h-[512px] bg-black'
+                    ref={viewerRefAxial}
+                />
+                <div
+                    className='w-[512px] h-[512px] bg-black'
+                    ref={viewerRefCoronal}
+                />
+                <div
+                    className='w-[512px] h-[512px] bg-black'
+                    ref={viewerRefSagittal}
+                />
+                <div
+                    className='w-[512px] h-[512px] bg-black'
+                    ref={viewerRefVolume}
+                />
+            </div>
+        </>
     )
 }
 
