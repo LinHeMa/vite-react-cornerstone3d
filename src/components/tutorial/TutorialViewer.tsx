@@ -1,18 +1,47 @@
-import { useEffect,  useRef } from "react"
-import { RenderingEngine, Enums, type Types, volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core"
-import {init as csRenderInit} from "@cornerstonejs/core"
-import {init as csToolsInit} from "@cornerstonejs/tools"
-import {init as dicomImageLoaderInit} from "@cornerstonejs/dicom-image-loader"
-import createImageIdsAndCacheMetaData from "../../lib/createImageIdsAndCacheMetaData"
+import { useEffect, useRef } from "react"
+import { RenderingEngine, Enums, type Types, volumeLoader, cornerstoneStreamingImageVolumeLoader, imageLoader } from "@cornerstonejs/core"
+import { init as csRenderInit } from "@cornerstonejs/core"
+import { init as csToolsInit } from "@cornerstonejs/tools"
+import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
+import { convertMultiframeImageIds, prefetchMetadataInformation } from "../../utils/prefetchMetadataInformation"
 
 
 volumeLoader.registerUnknownVolumeLoader(
-  cornerstoneStreamingImageVolumeLoader 
+  cornerstoneStreamingImageVolumeLoader
 )
 
 function TutorialViewer() {
   const elementRef = useRef<HTMLDivElement>(null)
   const running = useRef(false)
+  const fileDataRef = useRef({ imageIdList: [] })
+  const viewportRef = useRef(null)
+  
+  const loadAndViewImage = async function (imageId) {
+    await prefetchMetadataInformation([imageId]);
+    const stack = convertMultiframeImageIds([imageId]);
+    
+    // 確保渲染引擎和視口已經創建
+    if (viewportRef.current) {
+      // 使用正確的視口API
+      viewportRef.current.setStack(stack, 0).then(() => {
+        viewportRef.current.render();
+      });
+    } else {
+      console.warn('視口尚未初始化');
+    }
+  }
+  const handleSingleFileUpload = async (event: React.ChangeEvent<HTMLInputElement> | Event) => {
+    const files = Array.from((event.target as HTMLInputElement).files || []);
+    if (files.length === 0) {
+      console.warn('沒有選擇文件');
+      return;
+    }
+    const file = files[0];
+    const imageId = await cornerstoneDICOMImageLoader.wadouri.fileManager.add(file)
+    loadAndViewImage(imageId)
+    await imageLoader.loadAndCacheImage(imageId);
+    fileDataRef.current.imageIdList.push(imageId)
+  }
 
   useEffect(() => {
     const setup = async () => {
@@ -20,71 +49,53 @@ function TutorialViewer() {
         return
       }
       running.current = true
-      
+
       await csRenderInit()
       await csToolsInit()
-      dicomImageLoaderInit({maxWebWorkers:1})
+      dicomImageLoaderInit({ maxWebWorkers: 1 })
 
-      // Get Cornerstone imageIds and fetch metadata into RAM
-      const imageIds = await createImageIdsAndCacheMetaData({
-        StudyInstanceUID:
-          "1.3.6.1.4.1.14519.5.2.1.7009.2403.334240657131972136850343327463",
-        SeriesInstanceUID:
-          "1.3.6.1.4.1.14519.5.2.1.7009.2403.226151125820845824875394858561",
-        wadoRsRoot: "https://d3t6nz73ql33tx.cloudfront.net/dicomweb",
-      })
-
-      // Instantiate a rendering engine
+      // 即使沒有文件也初始化渲染引擎
       const renderingEngineId = "myRenderingEngine"
       const renderingEngine = new RenderingEngine(renderingEngineId)
       const viewportId = "CT"
 
-
       const viewportInput = {
         viewportId,
-        type: Enums.ViewportType.ORTHOGRAPHIC,
+        type: Enums.ViewportType.STACK, // 修改為STACK類型
         element: elementRef.current,
-        defaultOptions: {
-          orientation: Enums.OrientationAxis.SAGITTAL,
-        },
       }
 
       renderingEngine.enableElement(viewportInput)
 
-      // Get the stack viewport that was created
-      const viewport = renderingEngine.getViewport(viewportId) as Types.IVolumeViewport
+      // 獲取並保存視口引用
+      const viewport = renderingEngine.getViewport(viewportId)
+      viewportRef.current = viewport
 
-      // Define a volume in memory
-      const volumeId = "streamingImageVolume"
-      const volume = await volumeLoader.createAndCacheVolume(volumeId, {
-        imageIds,
-      })
-
-      // Set the volume to load
-      // @ts-ignore
-      volume.load()
-
-      // Set the volume on the viewport and it's default properties
-      viewport.setVolumes([{ volumeId}])
-
-      // Render the image
-      viewport.render()
+      // 如果已有圖像，則加載
+      if (fileDataRef.current.imageIdList.length > 0) {
+        loadAndViewImage(fileDataRef.current.imageIdList[0]);
+      }
     }
 
     setup()
-
-    // Create a stack viewport
   }, [elementRef, running])
 
   return (
-    <div
-      ref={elementRef}
-      style={{
-        width: "512px",
-        height: "512px",
-        backgroundColor: "#000",
-      }}
-    ></div>
+    <>
+      <input
+        type="file"
+        accept=".dcm"
+        onChange={handleSingleFileUpload}
+      />
+      <div
+        ref={elementRef}
+        style={{
+          width: "512px",
+          height: "512px",
+          backgroundColor: "#000",
+        }}
+      ></div>
+    </>
   )
 }
 
