@@ -1,10 +1,16 @@
 import React, { useEffect, useRef } from 'react'
-import { cornerstoneStreamingImageVolumeLoader, init as csRenderInit, Enums, RenderingEngine, Types, volumeLoader } from "@cornerstonejs/core"
+import { cornerstoneStreamingDynamicImageVolumeLoader, cornerstoneStreamingImageVolumeLoader, init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader } from "@cornerstonejs/core"
 import { init as csToolsInit } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { convertMultiframeImageIds, prefetchMetadataInformation } from '../../utils/prefetchMetadataInformation'
 
 type FileDataRefType = {
+    renderingEngine: RenderingEngine | null;
+    renderingEngineId: string;
+    toolGroup: null;
+    toolGroupId: string;
+    viewportIds: string[];
+    volumeId: string;
     fileList: File[];
     imageIdList: string[]
 }
@@ -14,10 +20,21 @@ volumeLoader.registerUnknownVolumeLoader(
 )
 
 const VolumeViewer = () => {
-    const fileDataRef = useRef<FileDataRefType>({ fileList: [], imageIdList: [] })
-    const running = useRef(false)
-    const viewerRef = useRef<HTMLDivElement>(null)
-
+    const fileDataRef = useRef<FileDataRefType>({
+        renderingEngine: null,
+        renderingEngineId: 'MY_RENDERING_ENGINE_ID',
+        toolGroup: null,
+        toolGroupId: 'MY_TOOL_GROUP_ID',
+        viewportIds: ['CT_AXIAL', 'CT_SAGITTAL', 'CT_CORONAL', 'CT_VOLUME'],
+        volumeId: '',
+        fileList: [],
+        imageIdList: []
+    });
+    const running = useRef(false);
+    const viewerRefAxial = useRef<HTMLDivElement>(null);
+    const viewerRefCoronal = useRef<HTMLDivElement>(null);
+    const viewerRefSagittal = useRef<HTMLDivElement>(null);
+    const viewerRefVolume = useRef<HTMLDivElement>(null);
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const fileList = Array.from(event.target.files);
         if (fileList && fileDataRef) {
@@ -48,8 +65,18 @@ const VolumeViewer = () => {
                 console.log("Not running or no files uploaded")
                 return;
             }
+            if (!viewerRefAxial.current || !viewerRefCoronal.current || !viewerRefSagittal.current || !viewerRefVolume.current) {
+                console.log('Rendering engine not initializing');
+                return;
+            }
+            
+            console.log('Rendering engine initializing');
 
             running.current = true;
+
+            const setupMultpleViewports = async () => {
+
+            }
 
             await csRenderInit();
             await csToolsInit();
@@ -62,21 +89,40 @@ const VolumeViewer = () => {
             const renderingEngine = new RenderingEngine(renderingEngineId)
             // TODO: Make this dynamic
             // TODO: find out what this means
-            const viewportId = "sponge"
+            const viewportIdAxial = "CT_AXIAL"
+            const viewportIdCoronal = "CT_CORONAL"
+            const viewportIdSagittal = "CT_SAGITTAL"
 
-            const viewportInput = {
-                viewportId,
-                element: viewerRef.current,
-                type: Enums.ViewportType.ORTHOGRAPHIC,
-                defaultOptions: {
-                    orientation: Enums.OrientationAxis.AXIAL,
+            const viewportInput = [
+                {
+                    viewportId: viewportIdAxial,
+                    element: viewerRefAxial.current,
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.AXIAL,
+                    },
                 },
-            }
+                {
+                    viewportId: viewportIdCoronal,
+                    element: viewerRefCoronal.current,
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.CORONAL,
+                    },
+                },
+                {
+                    viewportId: viewportIdSagittal,
+                    element: viewerRefSagittal.current,
+                    type: Enums.ViewportType.ORTHOGRAPHIC,
+                    defaultOptions: {
+                        orientation: Enums.OrientationAxis.SAGITTAL,
+                    },
+                }]
 
-            renderingEngine.enableElement(viewportInput)
+            renderingEngine.setViewports(viewportInput)
 
             // Get the stack viewport that was created
-            const viewport = renderingEngine.getViewport(viewportId) as Types.IVolumeViewport
+            // const viewport = renderingEngine.getViewports([viewportInput]) as Types.IVolumeViewport
 
             // Define a volume in memory, is not equal to load the volume
             // TODO: find out what this means
@@ -92,14 +138,20 @@ const VolumeViewer = () => {
             volume.load()
 
             // Set the volume on the viewport and it's default properties
-            viewport.setVolumes([{ volumeId }])
+            // viewport.setVolumes([{ volumeId }]) 
+            setVolumesForViewports(
+                renderingEngine,
+                [{ volumeId }],
+                [viewportIdAxial, viewportIdCoronal, viewportIdSagittal]
+            )
 
             // Render the image
-            viewport.render()
+            // viewport.render()
+            renderingEngine.renderViewports([viewportIdAxial, viewportIdCoronal, viewportIdSagittal])
         }
 
         setup()
-    }, [viewerRef, running])
+    }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, running])
 
     return (
         <div>
@@ -110,7 +162,23 @@ const VolumeViewer = () => {
                 onChange={handleFileChange}
             />
             <div
-                ref={viewerRef}
+                ref={viewerRefAxial}
+                style={{
+                    width: "512px",
+                    height: "512px",
+                    backgroundColor: "#000",
+                }}
+            />
+            <div
+                ref={viewerRefCoronal}
+                style={{
+                    width: "512px",
+                    height: "512px",
+                    backgroundColor: "#000",
+                }}
+            />
+            <div
+                ref={viewerRefSagittal}
                 style={{
                     width: "512px",
                     height: "512px",

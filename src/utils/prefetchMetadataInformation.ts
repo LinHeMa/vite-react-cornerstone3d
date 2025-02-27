@@ -5,9 +5,12 @@ import cornerstoneDICOMImageLoader from "@cornerstonejs/dicom-image-loader";
  * preloads imageIds metadata in memory
  **/
 async function prefetchMetadataInformation(imageIdsToPrefetch: string[]) {
+    console.log('in')
     for (let i = 0; i < imageIdsToPrefetch.length; i++) {
         await cornerstoneDICOMImageLoader.wadouri.loadImage(imageIdsToPrefetch[i])
-            .promise;
+            .promise.then((image) => {
+                console.log(image)
+            });
     }
 }
 function getFrameInformation(imageId) {
