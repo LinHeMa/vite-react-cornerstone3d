@@ -30,7 +30,7 @@ import { defineConfig } from "vite"
  * ```
  */
 export default defineConfig({
-  base: '/dicom-viewer-test/',
+  base: '/',
   plugins: [
     react(),
     // for dicom-parser
