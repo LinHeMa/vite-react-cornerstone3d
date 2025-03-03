@@ -1,8 +1,11 @@
 import React, { useEffect, useRef } from 'react'
 import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core"
-import { init as csToolsInit, } from "@cornerstonejs/tools"
+import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { type IToolGroup } from '@cornerstonejs/tools/types'
+import { addManipulationBindings } from '../../lib/addManipulationBindings'
+import labelmapTools from '../../lib/labelMapTools'
+import { MouseBindings } from '@cornerstonejs/tools/enums'
 
 type FileDataRefType = {
     renderingEngine: RenderingEngine | null;
@@ -83,7 +86,14 @@ const VolumeViewer = () => {
                 [{ volumeId: fileDataRef.current.volumeId }],
                 viewportIds,
             );
-
+            //TODO: fix ts problem
+            // this is necessary to setup the 3D viewport
+            (viewport as any).setProperties({
+                // preset candidates
+                // https://github.com/cornerstonejs/cornerstone3D/blob/main/packages/core/src/constants/viewportPresets.ts
+                // preset: 'MR-MIP', 
+                preset: 'CT-Bone',
+              });
             renderingEngine.render();
         } catch (error) {
             console.error('加載volume時出錯:', error);
@@ -123,6 +133,27 @@ const VolumeViewer = () => {
 
         const setupMultpleViewports = async () => {
             console.log('setupMultpleViewports')
+            // 2d tool
+            fileDataRef.current.toolGroup = ToolGroupManager.createToolGroup(
+                fileDataRef.current.toolGroupId,
+            );
+            addManipulationBindings(fileDataRef.current.toolGroup, {
+                toolMap: labelmapTools.toolMap,
+            });
+            addTool(BrushTool);
+            fileDataRef.current.toolGroup.addToolInstance('CircularBrush', BrushTool.toolName, {
+                activeStrategy: 'FILL_INSIDE_CIRCLE',
+            });
+            fileDataRef.current.toolGroup.setToolActive('CircularBrush', {
+                bindings: [{ mouseButton: MouseBindings.Primary }],
+            });
+            // 3d tool
+            const toolGroupId = 'TOOL_GROUP_ID';
+            const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+            // Add the tools to the tool group and specify which volume they are pointing at
+            addManipulationBindings(toolGroup, {
+                is3DViewport: true,
+            });
 
             const renderingEngine = new RenderingEngine(fileDataRef.current.renderingEngineId);
 
@@ -164,10 +195,14 @@ const VolumeViewer = () => {
                     },
                 }
             ]
+            console.log('viewportInputArray', viewportInputArray, fileDataRef.current);
 
             renderingEngine.setViewports(viewportInputArray);
-            console.log('renderingEngine', renderingEngine)
             fileDataRef.current.renderingEngine = renderingEngine;
+
+            // 3d tool
+            toolGroup.addViewport(fileDataRef.current.viewportIds[3], fileDataRef.current.renderingEngineId);
+
         }
         const setup = async () => {
             if (running.current) {
