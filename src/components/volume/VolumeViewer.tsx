@@ -1,12 +1,14 @@
-import React, { useEffect, useRef } from 'react'
-import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, } from "@cornerstonejs/core"
+import React, { useEffect, useRef, useState } from 'react'
+import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache } from "@cornerstonejs/core"
 import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, segmentation, Enums as ToolEnums } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { addManipulationBindings } from '../../lib/addManipulationBindings'
 import labelmapTools from '../../lib/labelMapTools'
 import { MouseBindings } from '@cornerstonejs/tools/enums'
 import { type FileDataRefType } from './types'
-import { BlendModes } from '@cornerstonejs/core/enums'
+import { BlendModes, Events } from '@cornerstonejs/core/enums'
+import { handleJumpToSlice } from '../../utils/handleJumpToSlice'
+import { EventTypes } from '@cornerstonejs/core/types'
 
 
 const VolumeViewer = () => {
@@ -18,19 +20,24 @@ const VolumeViewer = () => {
         toolGroup3D: null,
         toolGroupId3D: 'MY_3D_TOOL_GROUP_ID',
         viewportIds: ['CT_AXIAL', 'CT_SAGITTAL', 'CT_CORONAL', 'CT_VOLUME'],
-        volumeId: 'cornerstoneStreamingImageVolume' + ':' + csUtilities.uuidv4(),
+        volumeId: '',
         fileList: [],
         imageIdList: [],
         segmentationId: 'LOAD_SEG_ID:' + csUtilities.uuidv4(),
     });
     const running = useRef(false);
+    const [isLoading, setIsLoading] = useState(false);
     const viewerRefAxial = useRef<HTMLDivElement>(null);
     const viewerRefCoronal = useRef<HTMLDivElement>(null);
     const viewerRefSagittal = useRef<HTMLDivElement>(null);
     const viewerRefVolume = useRef<HTMLDivElement>(null);
 
+    // 新增一個狀態來追蹤選中的切片索引 
+    const [selectedSlice, setSelectedSlice] = useState<number>(0);
+    const [totalSlices, setTotalSlices] = useState<number>(0);
 
     const restart = () => {
+        setIsLoading(true)
         console.debug('Restarting some ui state about multiple file upload');
         const { volumeId } = fileDataRef.current;
 
@@ -40,6 +47,7 @@ const VolumeViewer = () => {
         }
 
         cache.removeVolumeLoadObject(volumeId);
+        setIsLoading(false)
     };
 
     /**
@@ -63,6 +71,7 @@ const VolumeViewer = () => {
 
     const loadUploadedFiles = async () => {
         restart()
+        const volumeLoaderScheme = 'cornerstoneStreamingImageVolume';
         const {
             imageIdList,
             viewportIds,
@@ -74,7 +83,7 @@ const VolumeViewer = () => {
             return;
         }
 
-
+        fileDataRef.current.volumeId = `${volumeLoaderScheme}:${csUtilities.uuidv4()}`
         try {
             const volume = await volumeLoader.createAndCacheVolume(fileDataRef.current.volumeId, {
                 imageIds: imageIdList,
@@ -175,6 +184,51 @@ const VolumeViewer = () => {
         await readUploadedFiles(files);
         await loadUploadedFiles();
     }
+
+    // 新增一個函數來處理選擇變更
+    const handleSliceChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+        const index = parseInt(event.target.value);
+        handleJumpToSlice(fileDataRef, index);
+        setSelectedSlice(index);
+    };
+
+    // 在載入圖像後更新總切片數
+    useEffect(() => {
+        if (fileDataRef.current.renderingEngine && fileDataRef.current.viewportIds) {
+            const viewport = fileDataRef.current.renderingEngine.getViewport(
+                fileDataRef.current.viewportIds[0]
+            );
+            if (viewport) {
+                const numberOfSlices = viewport.getNumberOfSlices();
+                setTotalSlices(numberOfSlices || 0);
+            }
+        }
+    }); // 當圖像列表改變時更新
+
+
+    // 監聽viewport的scroll事件
+    useEffect(() => {
+        // 當viewport初始化完成後，添加事件監聽器
+        if (fileDataRef.current.renderingEngine && fileDataRef.current.viewportIds) {
+            const viewport = fileDataRef.current.renderingEngine.getViewport(
+                fileDataRef.current.viewportIds[0]
+            );
+
+            // 監聽viewport的scroll事件
+            viewport.element.addEventListener(Events.IMAGE_RENDERED, () => {
+                const currentIndex = viewport.getCurrentImageIdIndex();
+                setSelectedSlice(currentIndex);
+            });
+
+            // 清理函數
+            return () => {
+                viewport.element.removeEventListener(Events.IMAGE_RENDERED, () => {
+                    const currentIndex = viewport.getCurrentImageIdIndex();
+                    setSelectedSlice(currentIndex);
+                });
+            };
+        }
+    }, [fileDataRef.current.renderingEngine, fileDataRef.current.viewportIds, isLoading]);
 
     useEffect(() => {
         if (
@@ -277,6 +331,7 @@ const VolumeViewer = () => {
             }
 
             running.current = true;
+            setIsLoading(true)
 
             // cornerstoneDICOMImageLoader.init({ maxWebWorkers: 1 });
             dicomImageLoaderInit({ maxWebWorkers: 1 });
@@ -284,21 +339,33 @@ const VolumeViewer = () => {
             await csToolsInit();
             setupMultpleViewports();
             console.debug('Rendering engine initialized');
+            setIsLoading(false)
         }
 
         setup()
     }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, viewerRefVolume, running])
 
     return (
-        <>
+        <div className='container p-4 flex flex-col items-center justify-center'>
             <input
-                className='cursor-pointer'
+                className='cursor-pointer border border-gray-300 rounded-md p-2 mb-4'
                 type="file"
                 multiple
                 accept=".dcm"
                 onChange={handleMultipleFileUpload}
             />
-            <div className="flex items-center justify-center">
+            {totalSlices > 0 && <select
+                value={selectedSlice}
+                onChange={handleSliceChange}
+                className='mb-4 p-2 border border-gray-300 rounded-md'
+            >
+                {Array.from({ length: totalSlices }, (_, i) => (
+                    <option key={i} value={i}>
+                        跳轉到切片 {i}
+                    </option>
+                ))}
+            </select>}
+            <div className="grid grid-cols-2 gap-4">
                 <div
                     className='w-[512px] h-[512px] bg-black'
                     ref={viewerRefAxial}
@@ -316,7 +383,7 @@ const VolumeViewer = () => {
                     ref={viewerRefVolume}
                 />
             </div>
-        </>
+        </div>
     )
 }
 
