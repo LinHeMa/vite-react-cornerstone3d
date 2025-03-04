@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache } from "@cornerstonejs/core"
-import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, segmentation, Enums as ToolEnums } from "@cornerstonejs/tools"
+import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, segmentation, Enums as ToolEnums, PanTool, ZoomTool, StackScrollTool, RectangleScissorsTool, PaintFillTool, SphereScissorsTool, CircleScissorsTool } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { addManipulationBindings } from '../../lib/addManipulationBindings'
 import labelmapTools from '../../lib/labelMapTools'
@@ -9,7 +9,23 @@ import { type FileDataRefType } from './types'
 import { BlendModes, Events } from '@cornerstonejs/core/enums'
 import { handleJumpToSlice } from '../../utils/handleJumpToSlice'
 import { EventTypes } from '@cornerstonejs/core/types'
+const brushInstanceNames = {
+    CircularBrush: 'CircularBrush',
+    CircularEraser: 'CircularEraser',
+    SphereBrush: 'SphereBrush',
+    SphereEraser: 'SphereEraser',
+    ThresholdCircle: 'ThresholdCircle',
+    ScissorsEraser: 'ScissorsEraser',
+};
 
+const brushStrategies = {
+    [brushInstanceNames.CircularBrush]: 'FILL_INSIDE_CIRCLE',
+    [brushInstanceNames.CircularEraser]: 'ERASE_INSIDE_CIRCLE',
+    [brushInstanceNames.SphereBrush]: 'FILL_INSIDE_SPHERE',
+    [brushInstanceNames.SphereEraser]: 'ERASE_INSIDE_SPHERE',
+    [brushInstanceNames.ThresholdCircle]: 'THRESHOLD_INSIDE_CIRCLE',
+    [brushInstanceNames.ScissorsEraser]: 'ERASE_INSIDE',
+};
 
 const VolumeViewer = () => {
     const fileDataRef = useRef<FileDataRefType>({
@@ -35,6 +51,9 @@ const VolumeViewer = () => {
     // 新增一個狀態來追蹤選中的切片索引 
     const [selectedSlice, setSelectedSlice] = useState<number>(0);
     const [totalSlices, setTotalSlices] = useState<number>(0);
+
+    // 新增一個狀態來追蹤當前選中的工具
+    const [activeTool, setActiveTool] = useState<string>('CircularBrush');
 
     const restart = () => {
         setIsLoading(true)
@@ -252,11 +271,18 @@ const VolumeViewer = () => {
             addManipulationBindings(fileDataRef.current.toolGroup2D, {
                 toolMap: labelmapTools.toolMap,
             });
+            addTool(PanTool);
+            addTool(ZoomTool);
+            addTool(StackScrollTool);
+            addTool(RectangleScissorsTool);
+            addTool(CircleScissorsTool);
+            addTool(SphereScissorsTool);
+            addTool(PaintFillTool);
             addTool(BrushTool);
-            fileDataRef.current.toolGroup2D.addToolInstance('CircularBrush', BrushTool.toolName, {
+            fileDataRef.current.toolGroup2D.addToolInstance(brushInstanceNames.CircularBrush, BrushTool.toolName, {
                 activeStrategy: 'FILL_INSIDE_CIRCLE',
             });
-            fileDataRef.current.toolGroup2D.setToolActive('CircularBrush', {
+            fileDataRef.current.toolGroup2D.setToolActive(brushInstanceNames.CircularBrush, {
                 bindings: [{ mouseButton: MouseBindings.Primary }],
             });
             /** 3d tool 
@@ -345,8 +371,28 @@ const VolumeViewer = () => {
         setup()
     }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, viewerRefVolume, running])
 
+    // 新增一個函數來處理工具切換
+    const handleToolChange = (toolName: string) => {
+        if (!fileDataRef.current.toolGroup2D) {
+            console.error('工具組尚未初始化');
+            return;
+        }
+        // 禁用當前活動工具
+        const toolNameNow = fileDataRef.current.toolGroup2D.getActivePrimaryMouseButtonTool();
+        if (toolNameNow) {
+            fileDataRef.current.toolGroup2D.setToolDisabled(toolNameNow);
+        }
+
+        // 設置選中的工具為活動狀態
+        fileDataRef.current.toolGroup2D.setToolActive(toolName, {
+            bindings: [{ mouseButton: MouseBindings.Primary }],
+        });
+
+        setActiveTool(toolName);
+    };
+
     return (
-        <div className='container p-4 flex flex-col items-center justify-center'>
+        <div className='container p-4 flex flex-col items-start justify-center'>
             <input
                 className='cursor-pointer border border-gray-300 rounded-md p-2 mb-4'
                 type="file"
@@ -354,6 +400,44 @@ const VolumeViewer = () => {
                 accept=".dcm"
                 onChange={handleMultipleFileUpload}
             />
+
+            {/* 工具切換按鈕組 */}
+            <div className="mb-4 flex flex-col space-x-2 gap-2">
+                <p className='text-sm text-gray-500'>工具</p>
+                <section className='flex space-x-2'>
+                    <button
+                        className={`px-3 py-2 rounded-md ${activeTool === 'CircularBrush' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => handleToolChange(brushInstanceNames.CircularBrush)}
+                    >
+                        圓形筆刷
+                    </button>
+                    <button
+                        className={`px-3 py-2 rounded-md ${activeTool === 'CircularEraser' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => handleToolChange(brushInstanceNames.CircularEraser)}
+                    >
+                        圓形橡皮擦
+                    </button>
+                    <button
+                        className={`px-3 py-2 rounded-md ${activeTool === 'SphereBrush' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => handleToolChange(brushInstanceNames.SphereBrush)}
+                    >
+                        球形筆刷
+                    </button>
+                    <button
+                        className={`px-3 py-2 rounded-md ${activeTool === 'SphereEraser' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => handleToolChange(brushInstanceNames.SphereEraser)}
+                    >
+                        球形橡皮擦
+                    </button>
+                    <button
+                        className={`px-3 py-2 rounded-md ${activeTool === 'ThresholdCircle' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => handleToolChange('ThresholdCircle')}
+                    >
+                        閾值圓形
+                    </button>
+                </section>
+            </div>
+
             {totalSlices > 0 && <select
                 value={selectedSlice}
                 onChange={handleSliceChange}
@@ -361,10 +445,11 @@ const VolumeViewer = () => {
             >
                 {Array.from({ length: totalSlices }, (_, i) => (
                     <option key={i} value={i}>
-                        跳轉到切片 {i}
+                        切片 {i + 1}
                     </option>
                 ))}
             </select>}
+
             <div className="grid grid-cols-2 gap-4">
                 <div
                     className='w-[512px] h-[512px] bg-black'
