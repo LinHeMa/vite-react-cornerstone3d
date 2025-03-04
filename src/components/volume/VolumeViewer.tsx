@@ -1,25 +1,13 @@
 import React, { useEffect, useRef } from 'react'
-import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, cornerstoneStreamingImageVolumeLoader, utilities } from "@cornerstonejs/core"
+import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, } from "@cornerstonejs/core"
 import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, segmentation, Enums as ToolEnums } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
-import { type IToolGroup } from '@cornerstonejs/tools/types'
 import { addManipulationBindings } from '../../lib/addManipulationBindings'
 import labelmapTools from '../../lib/labelMapTools'
 import { MouseBindings } from '@cornerstonejs/tools/enums'
+import { type FileDataRefType } from './types'
+import { BlendModes } from '@cornerstonejs/core/enums'
 
-type FileDataRefType = {
-    renderingEngine: RenderingEngine | null;
-    renderingEngineId: string;
-    toolGroup2D: null | IToolGroup;
-    toolGroupId2D: string;
-    toolGroup3D: null | IToolGroup;
-    toolGroupId3D: string;
-    viewportIds: string[];
-    volumeId: string;
-    fileList: File[];
-    imageIdList: string[]
-    segmentationId: string
-}
 
 const VolumeViewer = () => {
     const fileDataRef = useRef<FileDataRefType>({
@@ -30,10 +18,10 @@ const VolumeViewer = () => {
         toolGroup3D: null,
         toolGroupId3D: 'MY_3D_TOOL_GROUP_ID',
         viewportIds: ['CT_AXIAL', 'CT_SAGITTAL', 'CT_CORONAL', 'CT_VOLUME'],
-        volumeId: '',
+        volumeId: 'cornerstoneStreamingImageVolume' + ':' + csUtilities.uuidv4(),
         fileList: [],
         imageIdList: [],
-        segmentationId: 'LOAD_SEG_ID:' + utilities.uuidv4(),
+        segmentationId: 'LOAD_SEG_ID:' + csUtilities.uuidv4(),
     });
     const running = useRef(false);
     const viewerRefAxial = useRef<HTMLDivElement>(null);
@@ -41,35 +29,40 @@ const VolumeViewer = () => {
     const viewerRefSagittal = useRef<HTMLDivElement>(null);
     const viewerRefVolume = useRef<HTMLDivElement>(null);
 
-    const getSegmentationIds = () => {
-        return segmentation.state.getSegmentations().map((x) => x.segmentationId);
-    };
 
     const restart = () => {
-        console.log('restart', getSegmentationIds())
         console.debug('Restarting some ui state about multiple file upload');
         const { volumeId } = fileDataRef.current;
 
         if (!volumeId) {
+            console.error('volumeId is not set')
             return;
         }
 
         cache.removeVolumeLoadObject(volumeId);
     };
 
+    /**
+     * 載入 File 
+     * @param {File} file - 要加載的 DICOM 文件。
+     * @returns {Promise<string>} 返回加載的圖像 ID。
+     */
+    const loadImageIntoFileManager = async (file: File): Promise<string> => {
+        const imageId = await cornerstoneDICOMImageLoader.wadouri.fileManager.add(file);
+        await imageLoader.loadAndCacheImage(imageId);
+        return imageId;
+    };
+
     const readUploadedFiles = async (files: File[]) => {
         fileDataRef.current.imageIdList = [];
         for (const file of files) {
-            // NOTE: 這個是新增的測試
-            const imageId = await cornerstoneDICOMImageLoader.wadouri.fileManager.add(file)
-            await imageLoader.loadAndCacheImage(imageId);
+            const imageId = await loadImageIntoFileManager(file);
             fileDataRef.current.imageIdList.push(imageId)
         }
     }
 
     const loadUploadedFiles = async () => {
         restart()
-        const volumeLoaderScheme = 'cornerstoneStreamingImageVolume';
         const {
             imageIdList,
             viewportIds,
@@ -81,7 +74,6 @@ const VolumeViewer = () => {
             return;
         }
 
-        fileDataRef.current.volumeId = volumeLoaderScheme + ':' + csUtilities.uuidv4();
 
         try {
             const volume = await volumeLoader.createAndCacheVolume(fileDataRef.current.volumeId, {
@@ -110,20 +102,21 @@ const VolumeViewer = () => {
                 ToolEnums.SegmentationRepresentations.Labelmap
             )
 
-
-
             // viewportIds[3] 是 3d volume viewport
             const viewport = renderingEngine.getViewport(viewportIds[3]);
             await setVolumesForViewports(
                 renderingEngine,
                 [{
-                    volumeId: fileDataRef.current.volumeId, callback: ({ volumeActor }) => {
+                    volumeId: fileDataRef.current.volumeId,
+                    callback: ({ volumeActor }) => {
                         // set the windowLevel after the volumeActor is created
                         volumeActor
                             .getProperty()
                             .getRGBTransferFunction(0)
                             .setMappingRange(-180, 220);
                     },
+                    blendMode: BlendModes.MAXIMUM_INTENSITY_BLEND,
+                    slabThickness: 10,
                 }],
                 viewportIds,
             );
@@ -156,7 +149,7 @@ const VolumeViewer = () => {
                         segmentationId: fileDataRef.current.segmentationId,
                         type: ToolEnums.SegmentationRepresentations.Labelmap,
                     },
-                ],
+                ]
             })
 
             renderingEngine.render();
@@ -295,10 +288,6 @@ const VolumeViewer = () => {
 
         setup()
     }, [viewerRefAxial, viewerRefCoronal, viewerRefSagittal, viewerRefVolume, running])
-
-    useEffect(() => {
-        console.log('fileDataRef.current', fileDataRef.current)
-    })
 
     return (
         <>
