@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
-import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core"
-import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, } from "@cornerstonejs/tools"
+import { init as csRenderInit, Enums, RenderingEngine, setVolumesForViewports, Types, volumeLoader, utilities as csUtilities, imageLoader, cache, cornerstoneStreamingImageVolumeLoader, utilities } from "@cornerstonejs/core"
+import { addTool, BrushTool, init as csToolsInit, ToolGroupManager, segmentation, Enums as ToolEnums } from "@cornerstonejs/tools"
 import cornerstoneDICOMImageLoader, { init as dicomImageLoaderInit } from "@cornerstonejs/dicom-image-loader"
 import { type IToolGroup } from '@cornerstonejs/tools/types'
 import { addManipulationBindings } from '../../lib/addManipulationBindings'
@@ -10,24 +10,30 @@ import { MouseBindings } from '@cornerstonejs/tools/enums'
 type FileDataRefType = {
     renderingEngine: RenderingEngine | null;
     renderingEngineId: string;
-    toolGroup: null | IToolGroup;
-    toolGroupId: string;
+    toolGroup2D: null | IToolGroup;
+    toolGroupId2D: string;
+    toolGroup3D: null | IToolGroup;
+    toolGroupId3D: string;
     viewportIds: string[];
     volumeId: string;
     fileList: File[];
     imageIdList: string[]
+    segmentationId: string
 }
 
 const VolumeViewer = () => {
     const fileDataRef = useRef<FileDataRefType>({
         renderingEngine: null,
         renderingEngineId: 'MY_RENDERING_ENGINE_ID',
-        toolGroup: null,
-        toolGroupId: 'MY_TOOL_GROUP_ID',
+        toolGroup2D: null,
+        toolGroupId2D: 'MY_2D_TOOL_GROUP_ID',
+        toolGroup3D: null,
+        toolGroupId3D: 'MY_3D_TOOL_GROUP_ID',
         viewportIds: ['CT_AXIAL', 'CT_SAGITTAL', 'CT_CORONAL', 'CT_VOLUME'],
         volumeId: '',
         fileList: [],
-        imageIdList: []
+        imageIdList: [],
+        segmentationId: 'LOAD_SEG_ID:' + utilities.uuidv4(),
     });
     const running = useRef(false);
     const viewerRefAxial = useRef<HTMLDivElement>(null);
@@ -35,7 +41,12 @@ const VolumeViewer = () => {
     const viewerRefSagittal = useRef<HTMLDivElement>(null);
     const viewerRefVolume = useRef<HTMLDivElement>(null);
 
+    const getSegmentationIds = () => {
+        return segmentation.state.getSegmentations().map((x) => x.segmentationId);
+    };
+
     const restart = () => {
+        console.log('restart', getSegmentationIds())
         console.debug('Restarting some ui state about multiple file upload');
         const { volumeId } = fileDataRef.current;
 
@@ -77,13 +88,43 @@ const VolumeViewer = () => {
                 imageIds: imageIdList,
             });
 
+
+            await volumeLoader.createAndCacheDerivedLabelmapVolume(fileDataRef.current.volumeId, {
+                volumeId: fileDataRef.current.segmentationId
+            })
+
+            segmentation.addSegmentations([{
+                segmentationId: fileDataRef.current.segmentationId,
+                representation: {
+                    type: ToolEnums.SegmentationRepresentations.Labelmap,
+                    data: {
+                        volumeId: fileDataRef.current.segmentationId
+                    }
+                },
+            }]);
+
             await volume.load();
 
-            // viewportIds[3] 是 volume viewport
+            segmentation.activeSegmentation.setActiveSegmentation(
+                fileDataRef.current.segmentationId,
+                ToolEnums.SegmentationRepresentations.Labelmap
+            )
+
+
+
+            // viewportIds[3] 是 3d volume viewport
             const viewport = renderingEngine.getViewport(viewportIds[3]);
             await setVolumesForViewports(
                 renderingEngine,
-                [{ volumeId: fileDataRef.current.volumeId }],
+                [{
+                    volumeId: fileDataRef.current.volumeId, callback: ({ volumeActor }) => {
+                        // set the windowLevel after the volumeActor is created
+                        volumeActor
+                            .getProperty()
+                            .getRGBTransferFunction(0)
+                            .setMappingRange(-180, 220);
+                    },
+                }],
                 viewportIds,
             );
             //TODO: fix ts problem
@@ -93,7 +134,31 @@ const VolumeViewer = () => {
                 // https://github.com/cornerstonejs/cornerstone3D/blob/main/packages/core/src/constants/viewportPresets.ts
                 // preset: 'MR-MIP', 
                 preset: 'CT-Bone',
-              });
+            });
+            /**
+             * set for brush tool
+             */
+            await segmentation.addLabelmapRepresentationToViewportMap({
+                [viewportIds[0]]: [
+                    {
+                        segmentationId: fileDataRef.current.segmentationId,
+                        type: ToolEnums.SegmentationRepresentations.Labelmap,
+                    },
+                ],
+                [viewportIds[1]]: [
+                    {
+                        segmentationId: fileDataRef.current.segmentationId,
+                        type: ToolEnums.SegmentationRepresentations.Labelmap,
+                    },
+                ],
+                [viewportIds[2]]: [
+                    {
+                        segmentationId: fileDataRef.current.segmentationId,
+                        type: ToolEnums.SegmentationRepresentations.Labelmap,
+                    },
+                ],
+            })
+
             renderingEngine.render();
         } catch (error) {
             console.error('加載volume時出錯:', error);
@@ -134,28 +199,32 @@ const VolumeViewer = () => {
         const setupMultpleViewports = async () => {
             console.log('setupMultpleViewports')
             // 2d tool
-            fileDataRef.current.toolGroup = ToolGroupManager.createToolGroup(
-                fileDataRef.current.toolGroupId,
+            fileDataRef.current.toolGroup2D = ToolGroupManager.createToolGroup(
+                fileDataRef.current.toolGroupId2D,
             );
-            addManipulationBindings(fileDataRef.current.toolGroup, {
+            addManipulationBindings(fileDataRef.current.toolGroup2D, {
                 toolMap: labelmapTools.toolMap,
             });
             addTool(BrushTool);
-            fileDataRef.current.toolGroup.addToolInstance('CircularBrush', BrushTool.toolName, {
+            fileDataRef.current.toolGroup2D.addToolInstance('CircularBrush', BrushTool.toolName, {
                 activeStrategy: 'FILL_INSIDE_CIRCLE',
             });
-            fileDataRef.current.toolGroup.setToolActive('CircularBrush', {
+            fileDataRef.current.toolGroup2D.setToolActive('CircularBrush', {
                 bindings: [{ mouseButton: MouseBindings.Primary }],
             });
-            // 3d tool
-            const toolGroupId = 'TOOL_GROUP_ID';
-            const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+            /** 3d tool 
+             NOTE: needs 2 ids because we use different tool group for 2d and 3d
+             for example, if we use the same tool group id for the case,
+             the 3d will have brush tool and 2d will not
+             */
+            fileDataRef.current.toolGroup3D = ToolGroupManager.createToolGroup(fileDataRef.current.toolGroupId3D);
             // Add the tools to the tool group and specify which volume they are pointing at
-            addManipulationBindings(toolGroup, {
+            addManipulationBindings(fileDataRef.current.toolGroup3D, {
                 is3DViewport: true,
             });
 
             const renderingEngine = new RenderingEngine(fileDataRef.current.renderingEngineId);
+
 
             const viewportInputArray = [
                 {
@@ -200,8 +269,12 @@ const VolumeViewer = () => {
             renderingEngine.setViewports(viewportInputArray);
             fileDataRef.current.renderingEngine = renderingEngine;
 
+            // 2d tool
+            fileDataRef.current.toolGroup2D.addViewport(fileDataRef.current.viewportIds[0], fileDataRef.current.renderingEngineId);
+            fileDataRef.current.toolGroup2D.addViewport(fileDataRef.current.viewportIds[1], fileDataRef.current.renderingEngineId);
+            fileDataRef.current.toolGroup2D.addViewport(fileDataRef.current.viewportIds[2], fileDataRef.current.renderingEngineId);
             // 3d tool
-            toolGroup.addViewport(fileDataRef.current.viewportIds[3], fileDataRef.current.renderingEngineId);
+            fileDataRef.current.toolGroup3D.addViewport(fileDataRef.current.viewportIds[3], fileDataRef.current.renderingEngineId);
 
         }
         const setup = async () => {
